@@ -1,0 +1,29 @@
+2026-09-24 02:52:33 [INFO] Fallback: using requests
+2026-09-24 02:52:34 [INFO] History page 1 from https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json: 10 items
+2026-09-24 02:52:35 [INFO] History page 2 from https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json: 10 items
+2026-09-24 02:52:35 [INFO] History page 3 from https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json: 10 items
+2026-09-24 02:52:36 [INFO] History page 4 from https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json: 10 items
+2026-09-24 02:52:37 [INFO] Fetching https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json (attempt 1)
+2026-09-24 02:52:37 [INFO]   status=200 len=983
+2026-09-24 02:52:37 [INFO]   \u2713 SUCCESS — 10 items from https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json
+2026-09-24 02:52:38 [INFO] Fetching https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json (attempt 1)
+2026-09-24 02:52:38 [INFO]   status=200 len=983
+2026-09-24 02:52:38 [INFO]   \u2713 SUCCESS — 10 items from https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json
+2026-09-24 02:52:46 [INFO] Fetching https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json (attempt 1)
+2026-09-24 02:52:46 [INFO]   status=200 len=983
+2026-09-24 02:52:46 [INFO]   \u2713 SUCCESS — 10 items from https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json
+2026-09-24 02:52:53 [INFO] Fetching https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json (attempt 1)
+2026-09-24 02:52:53 [INFO]   status=200 len=992
+2026-09-24 02:52:53 [INFO]   \u2713 SUCCESS — 10 items from https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json
+2026-09-24 02:52:59 [INFO] Fetching https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json (attempt 1)
+2026-09-24 02:52:59 [INFO]   status=200 len=992
+2026-09-24 02:52:59 [INFO]   \u2713 SUCCESS — 10 items from https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json
+2026-09-24 02:53:05 [INFO] Fetching https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json (attempt 1)
+2026-09-24 02:53:05 [INFO]   status=200 len=992
+2026-09-24 02:53:05 [INFO]   \u2713 SUCCESS — 10 items from https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json
+2026-09-24 02:53:11 [INFO] Fetching https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json (attempt 1)
+2026-09-24 02:53:11 [INFO]   status=200 len=992
+2026-09-24 02:53:11 [INFO]   \u2713 SUCCESS — 10 items from https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json
+2026-09-24 02:53:17 [INFO] Fetching https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json (attempt 1)
+2026-09-24 02:53:17 [INFO]   status=200 len=992
+2026-09-24 02:53:17 [INFO]   \u2713 SUCCESS — 10 items from https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json

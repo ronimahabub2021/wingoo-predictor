@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.env
+.venv/
+venv/
+ENV/
+data/*.csv
+data/*.log
+.streamlit/secrets.toml
+.DS_Store
+*.swp
