@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-WinGo Predictor Engine v5.1 — Chrome120 Working Edition
+WinGo Predictor Engine v6.0 — Webshare Proxy Edition
 - 14-algorithm ensemble
-- Chrome120 impersonation (curl_cffi 0.6.2 compatible)
+- Webshare proxy rotation (Streamlit secrets)
+- Chrome120 impersonation (curl_cffi 0.6.2)
 - Multi-endpoint fallback
-- No proxy (direct connection)
 """
 
 import csv
 import logging
 import math
 import os
+import random
 import time
 from collections import Counter, defaultdict, deque
 from statistics import mean, stdev
@@ -76,11 +77,40 @@ logging.basicConfig(
 )
 log = logging.getLogger("wingo")
 
-# Console handler — visible in Streamlit Cloud logs
 console = logging.StreamHandler()
 console.setLevel(logging.INFO)
 console.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
 log.addHandler(console)
+
+
+# ════════════════════════════════════════════════════════════
+#  PROXY CONFIG (loaded from Streamlit secrets)
+# ════════════════════════════════════════════════════════════
+def load_proxy_config():
+    """Load proxy credentials from Streamlit secrets."""
+    try:
+        import streamlit as st
+        if "proxy" in st.secrets:
+            cfg = st.secrets["proxy"]
+            username = cfg.get("username", "")
+            password = cfg.get("password", "")
+            proxy_list = cfg.get("list", [])
+
+            if username and password and proxy_list:
+                proxies = []
+                for entry in proxy_list:
+                    proxies.append({
+                        "http": f"http://{username}:{password}@{entry}",
+                        "https": f"http://{username}:{password}@{entry}",
+                        "raw": entry,
+                    })
+                log.info("✓ Loaded %d proxies from secrets", len(proxies))
+                return proxies
+    except Exception as e:
+        log.warning("Failed to load proxy config: %s", e)
+
+    log.warning("No proxies configured — using direct connection")
+    return []
 
 
 # ════════════════════════════════════════════════════════════
@@ -250,7 +280,7 @@ class SessionState:
 
 
 # ════════════════════════════════════════════════════════════
-#  ALGORITHMS (14)
+#  ALGORITHMS
 # ════════════════════════════════════════════════════════════
 def _avg_streak_len(sizes):
     if len(sizes) < 4:
@@ -662,43 +692,38 @@ def multi_layer_prediction(df, session=None):
 
 
 # ════════════════════════════════════════════════════════════
-#  NETWORK — chrome120 + Direct Connection
+#  NETWORK — Webshare Proxy Rotation
 # ════════════════════════════════════════════════════════════
-_CURL_SESSION = None
+_PROXY_POOL = None
 
 
-def get_session():
-    """Create curl_cffi session with chrome120 impersonation."""
-    global _CURL_SESSION
-    if _CURL_SESSION is not None:
-        return _CURL_SESSION
+def get_proxy_pool():
+    global _PROXY_POOL
+    if _PROXY_POOL is None:
+        _PROXY_POOL = load_proxy_config()
+    return _PROXY_POOL
 
-    # Try chrome120 first (works with curl_cffi 0.6.2)
+
+def make_session(proxy_cfg=None):
+    """Create curl_cffi session with optional proxy."""
     for imp in ["chrome120", "chrome119", "chrome116",
                 "chrome110", "chrome107"]:
         try:
             session = curl_requests.Session(impersonate=imp)
             session.headers.update(HEADERS)
-            log.info("✓ curl_cffi session created: %s", imp)
-            _CURL_SESSION = session
-            return session
+            if proxy_cfg:
+                session.proxies = {
+                    "http": proxy_cfg["http"],
+                    "https": proxy_cfg["https"],
+                }
+            return session, imp
         except Exception as e:
             log.warning("  %s not supported: %s", imp, e)
             continue
-
-    # Fallback: plain requests
-    if REQUESTS_OK:
-        _CURL_SESSION = requests.Session()
-        _CURL_SESSION.headers.update(HEADERS)
-        log.info("Using plain requests (fallback)")
-        return _CURL_SESSION
-
-    log.error("No HTTP library available")
-    return None
+    return None, None
 
 
 def _extract_list(data):
-    """Extract draw list from any API response shape."""
     if data is None:
         return []
     if isinstance(data, list):
@@ -718,89 +743,114 @@ def _extract_list(data):
     return []
 
 
-def _try_fetch(session, url_base):
-    """Try one endpoint with given session."""
+def _try_fetch_with_proxy(url_base, proxy_cfg, label):
     try:
+        session, imp = make_session(proxy_cfg)
+        if session is None:
+            return None
+
         url = f"{url_base}?ts={int(time.time() * 1000)}"
-        log.info("Fetching: %s", url[:90])
+        log.info("  [%s] %s", label, imp)
         resp = session.get(url, timeout=FETCH_TIMEOUT)
-        log.info("  status=%s len=%s", resp.status_code, len(resp.text))
+        log.info("    status=%s len=%s", resp.status_code, len(resp.text))
 
         if resp.status_code != 200:
             return None
+
         try:
             data = resp.json()
         except Exception as je:
-            log.warning("  JSON decode failed: %s", je)
+            log.warning("    JSON decode failed: %s", je)
             return None
 
         lst = _extract_list(data)
         if lst:
-            log.info("  ✓ GOT %d items", len(lst))
+            log.info("    ✓ GOT %d items", len(lst))
             return lst
-        log.warning("  ✗ empty list, keys=%s",
-                    list(data.keys()) if isinstance(data, dict) else "?")
+        log.warning("    ✗ empty list")
         return None
     except Exception as e:
-        log.warning("  ✗ exception: %s", e)
+        log.warning("    ✗ exception: %s", e)
         return None
 
 
 def fetch_latest():
-    """Fetch latest draw — direct connection with chrome120."""
     log.info("=" * 60)
     log.info("fetch_latest() START")
     log.info("=" * 60)
 
-    session = get_session()
-    if session is None:
-        log.error("No session available")
-        return None
+    proxies = get_proxy_pool()
 
+    if proxies:
+        proxy_order = proxies.copy()
+        random.shuffle(proxy_order)
+
+        for i, proxy_cfg in enumerate(proxy_order, 1):
+            log.info("Proxy %d/%d: %s", i, len(proxy_order),
+                     proxy_cfg["raw"])
+            for url_base in API_ENDPOINTS:
+                lst = _try_fetch_with_proxy(
+                    url_base, proxy_cfg,
+                    f"P{i} {proxy_cfg['raw'].split(':')[0]}"
+                )
+                if lst:
+                    log.info("✓ SUCCESS via proxy %s", proxy_cfg["raw"])
+                    return lst[0]
+
+    log.info("Trying direct (no proxy)...")
     for url_base in API_ENDPOINTS:
         for attempt in range(1, MAX_RETRIES + 1):
-            lst = _try_fetch(session, url_base)
+            lst = _try_fetch_with_proxy(url_base, None, "direct")
             if lst:
                 return lst[0]
-            if attempt < MAX_RETRIES:
-                time.sleep(RETRY_DELAY)
+            time.sleep(RETRY_DELAY)
 
     log.error("All attempts failed")
     return None
 
 
 def fetch_history_pages(pages=4):
-    """Fetch history pages — direct connection with chrome120."""
     log.info("=" * 60)
     log.info("fetch_history_pages() START")
     log.info("=" * 60)
 
-    session = get_session()
-    if session is None:
-        return []
-
+    proxies = get_proxy_pool()
     results = []
-    for url_base in API_ENDPOINTS:
-        try:
-            for page in range(1, pages + 1):
-                url = (f"{url_base}?ts={int(time.time() * 1000)}"
-                       f"&pageNo={page}&pageSize=100")
-                try:
-                    resp = session.get(url, timeout=FETCH_TIMEOUT)
-                    if resp.status_code == 200:
-                        lst = _extract_list(resp.json())
-                        if lst:
-                            results.extend(lst)
-                            log.info("History p%d: %d items",
-                                     page, len(lst))
-                    time.sleep(0.4)
-                except Exception as e:
-                    log.warning("History page %d failed: %s", page, e)
-            if results:
-                log.info("Total history: %d items", len(results))
-                return results
-        except Exception as e:
-            log.warning("History from %s failed: %s", url_base, e)
 
-    log.warning("History fetch returned %d items", len(results))
+    if proxies:
+        proxy_order = proxies.copy()
+        random.shuffle(proxy_order)
+
+        for i, proxy_cfg in enumerate(proxy_order, 1):
+            log.info("Proxy %d/%d: %s", i, len(proxy_order),
+                     proxy_cfg["raw"])
+            try:
+                session, imp = make_session(proxy_cfg)
+                if session is None:
+                    continue
+
+                page_results = []
+                for url_base in API_ENDPOINTS:
+                    for page in range(1, pages + 1):
+                        try:
+                            url = (f"{url_base}?ts="
+                                   f"{int(time.time()*1000)}"
+                                   f"&pageNo={page}&pageSize=100")
+                            resp = session.get(url, timeout=FETCH_TIMEOUT)
+                            if resp.status_code == 200:
+                                lst = _extract_list(resp.json())
+                                if lst:
+                                    page_results.extend(lst)
+                            time.sleep(0.3)
+                        except Exception as e:
+                            log.warning("    p%d failed: %s", page, e)
+
+                    if page_results:
+                        log.info("    ✓ GOT %d items via %s",
+                                 len(page_results), proxy_cfg["raw"])
+                        return page_results
+            except Exception as e:
+                log.warning("    exception: %s", e)
+
+    log.warning("History fetch returned 0 items")
     return results
