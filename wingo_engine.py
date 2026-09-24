@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-WinGo Predictor Engine v4.0 — Production Ready
+WinGo Predictor Engine v5.0 — Proxy-Enabled Edition
 - 14-algorithm ensemble
-- Multi-endpoint API with browser impersonation (curl_cffi)
-- IP-block bypass via Chrome TLS fingerprint
-- Robust CSV + logging
+- Free proxy auto-rotation
+- Chrome impersonation via curl_cffi
 """
 
 import csv
@@ -17,7 +16,6 @@ import time
 from collections import Counter, defaultdict, deque
 from statistics import mean, stdev
 
-# ── HTTP client (curl_cffi preferred, fallback to requests) ──
 try:
     from curl_cffi import requests as curl_requests
     CURL_CFFI_OK = True
@@ -38,23 +36,29 @@ except ImportError:
     pd = None
 
 
-# ============================================================
+# ════════════════════════════════════════════════════════════
 #  CONFIG
-# ============================================================
+# ════════════════════════════════════════════════════════════
 API_ENDPOINTS = [
     "https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json",
     "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json",
-    "https://api.46lottery.com/api/webapi/GetNoaverageEmerdList",
+    "https://draw.ar-lottery01.com/WinGo/WinGo_3M/GetHistoryIssuePage.json",
+]
+
+PROXY_LIST_URLS = [
+    "https://cdn.jsdelivr.net/gh/proxyscrape/free-proxy-list@main/proxies/protocols/http/data.txt",
+    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
+    "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
 ]
 
 HEADERS = {
-    "accept"          : "application/json, text/plain, */*",
-    "accept-language" : "en-US,en;q=0.9",
-    "origin"          : "https://draw.ar-lottery01.com",
-    "referer"         : "https://draw.ar-lottery01.com/",
-    "user-agent"      : ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                         "AppleWebKit/537.36 (KHTML, like Gecko) "
-                         "Chrome/124.0.0.0 Safari/537.36"),
+    "accept": "application/json, text/plain, */*",
+    "accept-language": "en-US,en;q=0.9",
+    "origin": "https://draw.ar-lottery01.com",
+    "referer": "https://draw.ar-lottery01.com/",
+    "user-agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/124.0.0.0 Safari/537.36"),
 }
 
 DATA_DIR = os.environ.get("WINGO_DATA_DIR", "data")
@@ -63,14 +67,15 @@ CSV_FILE = os.path.join(DATA_DIR, "wingo_data.csv")
 PRED_LOG = os.path.join(DATA_DIR, "pred_log.csv")
 LOG_FILE = os.path.join(DATA_DIR, "wingo_predictor.log")
 
-MIN_DATA          = 50
-MAX_RETRIES       = 3
-RETRY_DELAY       = 3
-MIN_CONSENSUS     = 3
-CALIB_WINDOW      = 30
-FETCH_TIMEOUT     = 15
+MIN_DATA = 50
+MAX_RETRIES = 2
+RETRY_DELAY = 2
+MIN_CONSENSUS = 3
+CALIB_WINDOW = 30
+FETCH_TIMEOUT = 12
+PROXY_TEST_TIMEOUT = 8
+MAX_PROXY_TRIES = 25
 
-# ── logging ─────────────────────────────────────────────
 logging.basicConfig(
     filename=LOG_FILE, level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -78,10 +83,15 @@ logging.basicConfig(
 )
 log = logging.getLogger("wingo")
 
+console = logging.StreamHandler()
+console.setLevel(logging.INFO)
+console.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+log.addHandler(console)
 
-# ============================================================
-#  MATH HELPERS
-# ============================================================
+
+# ════════════════════════════════════════════════════════════
+#  MATH
+# ════════════════════════════════════════════════════════════
 def sigmoid_conf(raw, k=0.08, midpoint=60):
     try:
         return round(min(50 + 47 / (1 + math.exp(-k * (raw - midpoint))), 97), 1)
@@ -108,9 +118,9 @@ def ema(values, period):
     return e
 
 
-# ============================================================
-#  CSV HELPERS
-# ============================================================
+# ════════════════════════════════════════════════════════════
+#  CSV
+# ════════════════════════════════════════════════════════════
 def issue_key(issue):
     try:
         return (0, int(str(issue)))
@@ -176,9 +186,9 @@ def log_prediction(issue, pred, conf, actual, hit):
         log.warning("pred_log write failed: %s", e)
 
 
-# ============================================================
-#  SESSION STATE
-# ============================================================
+# ════════════════════════════════════════════════════════════
+#  SESSION
+# ════════════════════════════════════════════════════════════
 class AlgoTracker:
     def __init__(self, window=CALIB_WINDOW):
         self.window = window
@@ -245,9 +255,9 @@ class SessionState:
                      / len(recent) * 100, 1)
 
 
-# ============================================================
-#  ALGORITHMS (14)
-# ============================================================
+# ════════════════════════════════════════════════════════════
+#  ALGORITHMS
+# ════════════════════════════════════════════════════════════
 def _avg_streak_len(sizes):
     if len(sizes) < 4:
         return 3.0
@@ -526,9 +536,9 @@ def algo_ema(df):
     return pred, conf, f"EMA fast={fast:.2f} slow={slow:.2f}"
 
 
-# ============================================================
+# ════════════════════════════════════════════════════════════
 #  VOTING ENGINE
-# ============================================================
+# ════════════════════════════════════════════════════════════
 ALGO_WEIGHTS = {
     "Dragon": 1.4, "Balance": 1.3, "Momentum": 1.2, "Pattern": 1.6,
     "Cluster": 1.0, "Volatility": 0.9, "Parity": 1.0, "Zone": 0.9,
@@ -599,8 +609,7 @@ def multi_layer_prediction(df, session=None):
                 "logic": "No strong signal", "stats": "-",
                 "votes": vote_log, "total_data": total, "win_rate": 0.0,
                 "agreement": "0/0", "entropy": 0.0,
-                "big_score": 0, "small_score": 0,
-                "bayesian_prior": 50.0}
+                "big_score": 0, "small_score": 0, "bayesian_prior": 50.0}
 
     tot_score = big_score + small_score
     final_pred = "Big" if big_score > small_score else "Small"
@@ -658,126 +667,223 @@ def multi_layer_prediction(df, session=None):
     }
 
 
-# ============================================================
-#  NETWORK (curl_cffi + multi-endpoint fallback)
-# ============================================================
-_CURL_SESSION = None
+# ════════════════════════════════════════════════════════════
+#  NETWORK — FREE PROXY AUTO-ROTATION
+# ════════════════════════════════════════════════════════════
+_CACHED_PROXY = None
+_PROXY_FETCH_TIME = 0
 
 
-def get_session():
-    """Create curl_cffi session impersonating Chrome (bypasses IP blocks)."""
-    global _CURL_SESSION
-    if _CURL_SESSION is not None:
-        return _CURL_SESSION
-
-    if CURL_CFFI_OK:
+def fetch_proxy_list():
+    """Fetch free proxy list from multiple sources."""
+    all_proxies = set()
+    for url in PROXY_LIST_URLS:
         try:
-            _CURL_SESSION = curl_requests.Session(impersonate="chrome124")
-            _CURL_SESSION.headers.update(HEADERS)
-            log.info("Using curl_cffi (Chrome impersonation)")
-            return _CURL_SESSION
+            log.info("Fetching proxies from: %s", url[:70])
+            r = requests.get(url, timeout=10)
+            if r.status_code == 200:
+                lines = [l.strip() for l in r.text.splitlines()
+                         if l.strip() and not l.startswith("#")]
+                for line in lines:
+                    if ":" in line and len(line) < 30:
+                        all_proxies.add(line.strip())
+                log.info("  Got %d proxies (total: %d)",
+                         len(lines), len(all_proxies))
         except Exception as e:
-            log.warning("curl_cffi session failed: %s", e)
+            log.warning("  Failed: %s", e)
 
-    if REQUESTS_OK:
-        _CURL_SESSION = requests.Session()
-        _CURL_SESSION.headers.update(HEADERS)
-        log.info("Fallback: using requests")
-        return _CURL_SESSION
+    proxies = list(all_proxies)
+    log.info("Total unique proxies: %d", len(proxies))
+    return proxies
 
-    log.error("No HTTP library available")
+
+def test_proxy(proxy):
+    """Test if a proxy can reach the API."""
+    try:
+        session = curl_requests.Session(impersonate="chrome124")
+        session.proxies = {
+            "http": f"http://{proxy}",
+            "https": f"http://{proxy}"
+        }
+        url = API_ENDPOINTS[0] + f"?ts={int(time.time()*1000)}"
+        resp = session.get(url, timeout=PROXY_TEST_TIMEOUT)
+
+        if resp.status_code == 200:
+            try:
+                data = resp.json()
+                lst = _extract_list(data)
+                if lst:
+                    return True
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return False
+
+
+def get_working_proxy():
+    """Get a working proxy from the pool (cached for 5 minutes)."""
+    global _CACHED_PROXY, _PROXY_FETCH_TIME
+
+    if _CACHED_PROXY and (time.time() - _PROXY_FETCH_TIME) < 300:
+        return _CACHED_PROXY
+
+    log.info("=" * 60)
+    log.info("Searching for working proxy...")
+    log.info("=" * 60)
+
+    proxies = fetch_proxy_list()
+    if not proxies:
+        log.warning("No proxies available")
+        return None
+
+    random.shuffle(proxies)
+    tried = 0
+
+    for proxy in proxies:
+        if tried >= MAX_PROXY_TRIES:
+            break
+        tried += 1
+        log.info("Testing proxy %d/%d: %s",
+                 tried, min(MAX_PROXY_TRIES, len(proxies)), proxy)
+        if test_proxy(proxy):
+            log.info("✓ FOUND WORKING PROXY: %s", proxy)
+            _CACHED_PROXY = proxy
+            _PROXY_FETCH_TIME = time.time()
+            return proxy
+
+    log.warning("No working proxy found after %d tries", tried)
     return None
 
 
 def _extract_list(data):
-    """Extract draw list from different API response shapes."""
+    """Extract draw list from API response."""
+    if data is None:
+        return []
+    if isinstance(data, list):
+        return data
     if not isinstance(data, dict):
         return []
+    for key in ("list", "data", "items", "result", "results", "rows"):
+        v = data.get(key)
+        if isinstance(v, list):
+            return v
     d = data.get("data")
     if isinstance(d, dict):
-        lst = d.get("list")
-        if isinstance(lst, list):
-            return lst
-        inner = d.get("data")
-        if isinstance(inner, list):
-            return inner
-    if isinstance(d, list):
-        return d
-    lst = data.get("list")
-    if isinstance(lst, list):
-        return lst
+        for key in ("list", "data", "items", "result", "results", "rows"):
+            v = d.get(key)
+            if isinstance(v, list):
+                return v
     return []
 
 
-def fetch_latest():
-    """Fetch latest draw from any working endpoint."""
-    session = get_session()
-    if session is None:
+def _try_fetch(session, url_base):
+    """Try to fetch from one endpoint with given session."""
+    try:
+        url = f"{url_base}?ts={int(time.time() * 1000)}"
+        log.info("Fetching: %s", url[:80])
+        resp = session.get(url, timeout=FETCH_TIMEOUT)
+        log.info("  status=%s len=%s", resp.status_code, len(resp.text))
+
+        if resp.status_code != 200:
+            return None
+        try:
+            data = resp.json()
+        except Exception as je:
+            log.warning("  JSON decode failed: %s", je)
+            return None
+
+        lst = _extract_list(data)
+        if lst:
+            log.info("  ✓ GOT %d items", len(lst))
+            return lst
+        log.warning("  ✗ empty list, keys=%s",
+                    list(data.keys()) if isinstance(data, dict) else "?")
+        return None
+    except Exception as e:
+        log.warning("  ✗ exception: %s", e)
         return None
 
+
+def fetch_latest():
+    """Fetch latest draw with proxy rotation."""
+    log.info("=" * 60)
+    log.info("fetch_latest() START")
+    log.info("=" * 60)
+
+    working_proxy = get_working_proxy()
+
+    # Try with proxy first
+    if working_proxy:
+        try:
+            session = curl_requests.Session(impersonate="chrome124")
+            session.headers.update(HEADERS)
+            session.proxies = {
+                "http": f"http://{working_proxy}",
+                "https": f"http://{working_proxy}"
+            }
+            for url_base in API_ENDPOINTS:
+                lst = _try_fetch(session, url_base)
+                if lst:
+                    return lst[0]
+        except Exception as e:
+            log.warning("Proxy session failed: %s", e)
+
+    # Fallback: direct (no proxy)
+    log.info("Trying direct (no proxy)...")
     for url_base in API_ENDPOINTS:
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                time.sleep(random.uniform(0.5, 1.5))  # jitter
-                url = f"{url_base}?ts={int(time.time() * 1000)}"
-                log.info("Fetching %s (attempt %d)", url_base, attempt)
-
-                resp = session.get(url, timeout=FETCH_TIMEOUT)
-                log.info("  status=%s len=%s",
-                         resp.status_code, len(resp.text))
-
-                if resp.status_code != 200:
-                    time.sleep(RETRY_DELAY * attempt)
-                    continue
-
-                try:
-                    data = resp.json()
-                except Exception as je:
-                    log.warning("  JSON decode failed: %s", je)
-                    time.sleep(RETRY_DELAY)
-                    continue
-
-                lst = _extract_list(data)
+                session = curl_requests.Session(impersonate="chrome124")
+                session.headers.update(HEADERS)
+                lst = _try_fetch(session, url_base)
                 if lst:
-                    log.info("  ✓ SUCCESS — %d items from %s",
-                             len(lst), url_base)
                     return lst[0]
-                else:
-                    log.warning("  empty list, keys=%s",
-                                list(data.keys()) if isinstance(data, dict)
-                                else type(data).__name__)
             except Exception as e:
-                log.warning("  %s attempt %d: %s", url_base, attempt, e)
-                time.sleep(RETRY_DELAY)
+                log.warning("Direct attempt %d failed: %s", attempt, e)
+            time.sleep(RETRY_DELAY)
 
-    log.error("All endpoints failed")
+    log.error("All attempts failed")
     return None
 
 
-def fetch_history_pages(pages=3):
-    """Fetch multiple pages of history for initial load."""
-    session = get_session()
-    if session is None:
-        return []
+def fetch_history_pages(pages=4):
+    """Fetch history pages with proxy."""
+    log.info("=" * 60)
+    log.info("fetch_history_pages() START")
+    log.info("=" * 60)
 
+    working_proxy = get_working_proxy()
     results = []
-    for url_base in API_ENDPOINTS:
+
+    if working_proxy:
         try:
-            for page in range(1, pages + 1):
-                url = (f"{url_base}?ts={int(time.time() * 1000)}"
-                       f"&pageNo={page}&pageSize=100")
-                resp = session.get(url, timeout=FETCH_TIMEOUT)
-                if resp.status_code != 200:
-                    continue
-                data = resp.json()
-                lst = _extract_list(data)
-                if lst:
-                    log.info("History page %d from %s: %d items",
-                             page, url_base, len(lst))
-                    results.extend(lst)
-                time.sleep(0.5)
-            if results:
-                return results
+            session = curl_requests.Session(impersonate="chrome124")
+            session.headers.update(HEADERS)
+            session.proxies = {
+                "http": f"http://{working_proxy}",
+                "https": f"http://{working_proxy}"
+            }
+            for url_base in API_ENDPOINTS:
+                for page in range(1, pages + 1):
+                    try:
+                        url = (f"{url_base}?ts={int(time.time()*1000)}"
+                               f"&pageNo={page}&pageSize=100")
+                        resp = session.get(url, timeout=FETCH_TIMEOUT)
+                        if resp.status_code == 200:
+                            lst = _extract_list(resp.json())
+                            if lst:
+                                results.extend(lst)
+                                log.info("History p%d: %d items",
+                                         page, len(lst))
+                        time.sleep(0.5)
+                    except Exception as e:
+                        log.warning("History page %d failed: %s", page, e)
+                if results:
+                    log.info("Total history: %d items", len(results))
+                    return results
         except Exception as e:
-            log.warning("History fetch from %s failed: %s", url_base, e)
+            log.warning("Proxy history fetch failed: %s", e)
+
+    log.warning("History fetch returned %d items", len(results))
     return results
