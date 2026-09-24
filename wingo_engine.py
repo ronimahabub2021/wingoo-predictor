@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-WinGo Predictor Engine v5.0 — Proxy-Enabled Edition
+WinGo Predictor Engine v5.1 — Chrome120 Working Edition
 - 14-algorithm ensemble
-- Free proxy auto-rotation
-- Chrome impersonation via curl_cffi
+- Chrome120 impersonation (curl_cffi 0.6.2 compatible)
+- Multi-endpoint fallback
+- No proxy (direct connection)
 """
 
 import csv
 import logging
 import math
 import os
-import random
 import time
 from collections import Counter, defaultdict, deque
 from statistics import mean, stdev
 
+# ── HTTP clients ──
 try:
     from curl_cffi import requests as curl_requests
     CURL_CFFI_OK = True
@@ -45,12 +46,6 @@ API_ENDPOINTS = [
     "https://draw.ar-lottery01.com/WinGo/WinGo_3M/GetHistoryIssuePage.json",
 ]
 
-PROXY_LIST_URLS = [
-    "https://cdn.jsdelivr.net/gh/proxyscrape/free-proxy-list@main/proxies/protocols/http/data.txt",
-    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
-    "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
-]
-
 HEADERS = {
     "accept": "application/json, text/plain, */*",
     "accept-language": "en-US,en;q=0.9",
@@ -58,7 +53,7 @@ HEADERS = {
     "referer": "https://draw.ar-lottery01.com/",
     "user-agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                   "Chrome/124.0.0.0 Safari/537.36"),
+                   "Chrome/120.0.0.0 Safari/537.36"),
 }
 
 DATA_DIR = os.environ.get("WINGO_DATA_DIR", "data")
@@ -72,9 +67,7 @@ MAX_RETRIES = 2
 RETRY_DELAY = 2
 MIN_CONSENSUS = 3
 CALIB_WINDOW = 30
-FETCH_TIMEOUT = 12
-PROXY_TEST_TIMEOUT = 8
-MAX_PROXY_TRIES = 25
+FETCH_TIMEOUT = 15
 
 logging.basicConfig(
     filename=LOG_FILE, level=logging.INFO,
@@ -83,6 +76,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("wingo")
 
+# Console handler — visible in Streamlit Cloud logs
 console = logging.StreamHandler()
 console.setLevel(logging.INFO)
 console.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
@@ -256,7 +250,7 @@ class SessionState:
 
 
 # ════════════════════════════════════════════════════════════
-#  ALGORITHMS
+#  ALGORITHMS (14)
 # ════════════════════════════════════════════════════════════
 def _avg_streak_len(sizes):
     if len(sizes) < 4:
@@ -668,96 +662,43 @@ def multi_layer_prediction(df, session=None):
 
 
 # ════════════════════════════════════════════════════════════
-#  NETWORK — FREE PROXY AUTO-ROTATION
+#  NETWORK — chrome120 + Direct Connection
 # ════════════════════════════════════════════════════════════
-_CACHED_PROXY = None
-_PROXY_FETCH_TIME = 0
+_CURL_SESSION = None
 
 
-def fetch_proxy_list():
-    """Fetch free proxy list from multiple sources."""
-    all_proxies = set()
-    for url in PROXY_LIST_URLS:
+def get_session():
+    """Create curl_cffi session with chrome120 impersonation."""
+    global _CURL_SESSION
+    if _CURL_SESSION is not None:
+        return _CURL_SESSION
+
+    # Try chrome120 first (works with curl_cffi 0.6.2)
+    for imp in ["chrome120", "chrome119", "chrome116",
+                "chrome110", "chrome107"]:
         try:
-            log.info("Fetching proxies from: %s", url[:70])
-            r = requests.get(url, timeout=10)
-            if r.status_code == 200:
-                lines = [l.strip() for l in r.text.splitlines()
-                         if l.strip() and not l.startswith("#")]
-                for line in lines:
-                    if ":" in line and len(line) < 30:
-                        all_proxies.add(line.strip())
-                log.info("  Got %d proxies (total: %d)",
-                         len(lines), len(all_proxies))
+            session = curl_requests.Session(impersonate=imp)
+            session.headers.update(HEADERS)
+            log.info("✓ curl_cffi session created: %s", imp)
+            _CURL_SESSION = session
+            return session
         except Exception as e:
-            log.warning("  Failed: %s", e)
+            log.warning("  %s not supported: %s", imp, e)
+            continue
 
-    proxies = list(all_proxies)
-    log.info("Total unique proxies: %d", len(proxies))
-    return proxies
+    # Fallback: plain requests
+    if REQUESTS_OK:
+        _CURL_SESSION = requests.Session()
+        _CURL_SESSION.headers.update(HEADERS)
+        log.info("Using plain requests (fallback)")
+        return _CURL_SESSION
 
-
-def test_proxy(proxy):
-    """Test if a proxy can reach the API."""
-    try:
-        session = curl_requests.Session(impersonate="chrome124")
-        session.proxies = {
-            "http": f"http://{proxy}",
-            "https": f"http://{proxy}"
-        }
-        url = API_ENDPOINTS[0] + f"?ts={int(time.time()*1000)}"
-        resp = session.get(url, timeout=PROXY_TEST_TIMEOUT)
-
-        if resp.status_code == 200:
-            try:
-                data = resp.json()
-                lst = _extract_list(data)
-                if lst:
-                    return True
-            except Exception:
-                pass
-    except Exception:
-        pass
-    return False
-
-
-def get_working_proxy():
-    """Get a working proxy from the pool (cached for 5 minutes)."""
-    global _CACHED_PROXY, _PROXY_FETCH_TIME
-
-    if _CACHED_PROXY and (time.time() - _PROXY_FETCH_TIME) < 300:
-        return _CACHED_PROXY
-
-    log.info("=" * 60)
-    log.info("Searching for working proxy...")
-    log.info("=" * 60)
-
-    proxies = fetch_proxy_list()
-    if not proxies:
-        log.warning("No proxies available")
-        return None
-
-    random.shuffle(proxies)
-    tried = 0
-
-    for proxy in proxies:
-        if tried >= MAX_PROXY_TRIES:
-            break
-        tried += 1
-        log.info("Testing proxy %d/%d: %s",
-                 tried, min(MAX_PROXY_TRIES, len(proxies)), proxy)
-        if test_proxy(proxy):
-            log.info("✓ FOUND WORKING PROXY: %s", proxy)
-            _CACHED_PROXY = proxy
-            _PROXY_FETCH_TIME = time.time()
-            return proxy
-
-    log.warning("No working proxy found after %d tries", tried)
+    log.error("No HTTP library available")
     return None
 
 
 def _extract_list(data):
-    """Extract draw list from API response."""
+    """Extract draw list from any API response shape."""
     if data is None:
         return []
     if isinstance(data, list):
@@ -778,10 +719,10 @@ def _extract_list(data):
 
 
 def _try_fetch(session, url_base):
-    """Try to fetch from one endpoint with given session."""
+    """Try one endpoint with given session."""
     try:
         url = f"{url_base}?ts={int(time.time() * 1000)}"
-        log.info("Fetching: %s", url[:80])
+        log.info("Fetching: %s", url[:90])
         resp = session.get(url, timeout=FETCH_TIMEOUT)
         log.info("  status=%s len=%s", resp.status_code, len(resp.text))
 
@@ -806,84 +747,60 @@ def _try_fetch(session, url_base):
 
 
 def fetch_latest():
-    """Fetch latest draw with proxy rotation."""
+    """Fetch latest draw — direct connection with chrome120."""
     log.info("=" * 60)
     log.info("fetch_latest() START")
     log.info("=" * 60)
 
-    working_proxy = get_working_proxy()
+    session = get_session()
+    if session is None:
+        log.error("No session available")
+        return None
 
-    # Try with proxy first
-    if working_proxy:
-        try:
-            session = curl_requests.Session(impersonate="chrome124")
-            session.headers.update(HEADERS)
-            session.proxies = {
-                "http": f"http://{working_proxy}",
-                "https": f"http://{working_proxy}"
-            }
-            for url_base in API_ENDPOINTS:
-                lst = _try_fetch(session, url_base)
-                if lst:
-                    return lst[0]
-        except Exception as e:
-            log.warning("Proxy session failed: %s", e)
-
-    # Fallback: direct (no proxy)
-    log.info("Trying direct (no proxy)...")
     for url_base in API_ENDPOINTS:
         for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                session = curl_requests.Session(impersonate="chrome124")
-                session.headers.update(HEADERS)
-                lst = _try_fetch(session, url_base)
-                if lst:
-                    return lst[0]
-            except Exception as e:
-                log.warning("Direct attempt %d failed: %s", attempt, e)
-            time.sleep(RETRY_DELAY)
+            lst = _try_fetch(session, url_base)
+            if lst:
+                return lst[0]
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_DELAY)
 
     log.error("All attempts failed")
     return None
 
 
 def fetch_history_pages(pages=4):
-    """Fetch history pages with proxy."""
+    """Fetch history pages — direct connection with chrome120."""
     log.info("=" * 60)
     log.info("fetch_history_pages() START")
     log.info("=" * 60)
 
-    working_proxy = get_working_proxy()
-    results = []
+    session = get_session()
+    if session is None:
+        return []
 
-    if working_proxy:
+    results = []
+    for url_base in API_ENDPOINTS:
         try:
-            session = curl_requests.Session(impersonate="chrome124")
-            session.headers.update(HEADERS)
-            session.proxies = {
-                "http": f"http://{working_proxy}",
-                "https": f"http://{working_proxy}"
-            }
-            for url_base in API_ENDPOINTS:
-                for page in range(1, pages + 1):
-                    try:
-                        url = (f"{url_base}?ts={int(time.time()*1000)}"
-                               f"&pageNo={page}&pageSize=100")
-                        resp = session.get(url, timeout=FETCH_TIMEOUT)
-                        if resp.status_code == 200:
-                            lst = _extract_list(resp.json())
-                            if lst:
-                                results.extend(lst)
-                                log.info("History p%d: %d items",
-                                         page, len(lst))
-                        time.sleep(0.5)
-                    except Exception as e:
-                        log.warning("History page %d failed: %s", page, e)
-                if results:
-                    log.info("Total history: %d items", len(results))
-                    return results
+            for page in range(1, pages + 1):
+                url = (f"{url_base}?ts={int(time.time() * 1000)}"
+                       f"&pageNo={page}&pageSize=100")
+                try:
+                    resp = session.get(url, timeout=FETCH_TIMEOUT)
+                    if resp.status_code == 200:
+                        lst = _extract_list(resp.json())
+                        if lst:
+                            results.extend(lst)
+                            log.info("History p%d: %d items",
+                                     page, len(lst))
+                    time.sleep(0.4)
+                except Exception as e:
+                    log.warning("History page %d failed: %s", page, e)
+            if results:
+                log.info("Total history: %d items", len(results))
+                return results
         except Exception as e:
-            log.warning("Proxy history fetch failed: %s", e)
+            log.warning("History from %s failed: %s", url_base, e)
 
     log.warning("History fetch returned %d items", len(results))
     return results
